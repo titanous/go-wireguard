@@ -1,6 +1,7 @@
 package wireguard
 
 import (
+	"fmt"
 	"net"
 )
 
@@ -51,7 +52,8 @@ func (f *Interface) receiveHandshakePacket(typ messageType, p packet) {
 			return
 		}
 		peer.updateLatestAddr(p.addr)
-		f.handshakeSendResponse(peer)
+		res := f.handshakeCreateResponse(&peer.handshake)
+		_ = res
 	case messageHandshakeResponse:
 		peer, err = f.handshakeConsumeResponse(p.data)
 		if err != nil {
@@ -60,27 +62,12 @@ func (f *Interface) receiveHandshakePacket(typ messageType, p packet) {
 		}
 		peer.timerEphemeralKeyCreated()
 		peer.timerHandshakeComplete()
+	default:
+		panic(fmt.Sprintf("invalid packet type %d from %s in receiveHandshakePacket", typ, p.addr))
 	}
 
 	peer.rxStats(len(p.data))
 	peer.timerAnyAuthenticatedPacketReceived()
 	peer.timerAnyAuthenticatedPacketTraversal()
 	peer.updateLatestAddr(p.addr)
-}
-
-func (f *Interface) handshakeConsumeInitiation(data []byte) (*peer, error) {
-	f.identityMtx.RLock()
-	defer f.identityMtx.RUnlock()
-
-	if f.
-
-	return nil, nil
-}
-
-func (f *Interface) handshakeConsumeResponse(data []byte) (*peer, error) {
-	return nil, nil
-}
-
-func (f *Interface) handshakeSendResponse(p *peer) {
-
 }

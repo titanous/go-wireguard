@@ -3,6 +3,10 @@ package wireguard
 import (
 	"errors"
 	"io"
+	"sync"
+
+	"github.com/flynn/noise"
+	"golang.org/x/crypto/curve25519"
 )
 
 // An InterfaceConfig is the configuration used to create an interface.
@@ -17,8 +21,8 @@ type InterfaceConfig struct {
 	// will provide a single received IP packet.
 	Inside io.ReadWriter
 
-	// PrivateKey holds the static Curve25519 private key for the interface. It
-	// must be exactly 32 random bytes.
+	// PrivateKey holds the static Curve25519 private key for the interface. If
+	// set, it must be exactly 32 random bytes.
 	PrivateKey []byte
 
 	// PresharedKey holds an optional pre-shared key to use during handshakes.
@@ -37,20 +41,23 @@ func NewInterface(c InterfaceConfig) (*Interface, error) {
 	if c.Inside == nil {
 		return nil, errors.New("wireguard: Inside pipe is nil")
 	}
-	if len(c.PrivateKey) != 32 {
-		return nil, errors.New("wireguard: PrivateKey must be exactly 32 bytes")
-	}
-	if c.PresharedKey != nil && len(c.PresharedKey) != 32 {
-		return nil, errors.New("wireguard: when not nil, PresharedKey must be exactly 32 bytes")
+
+	f := &Interface{
+		outside: c.Outside,
+		inside:  c.Inside,
 	}
 
-	return &Interface{
-		outside:      c.Outside,
-		inside:       c.Inside,
-		privateKey:   c.PrivateKey,
-		presharedKey: c.PresharedKey,
-	}, nil
+	if err := f.SetPrivateKey(c.PrivateKey); err != nil {
+		return nil, err
+	}
+	if err := f.SetPresharedKey(c.PresharedKey); err != nil {
+		return nil, err
+	}
+
+	return f, nil
 }
+
+type publicKey [32]byte
 
 // An Interface communicates encrypted packets with peers.
 type Interface struct {
@@ -59,11 +66,15 @@ type Interface struct {
 	outside UDPConn
 	inside  io.ReadWriter
 
-	identityMtx sync.RWMutex // protects staticKey and presharedKey
-	staticKey *noise.DHKey
+	identityMtx  sync.RWMutex // protects staticKey and presharedKey
+	staticKey    noise.DHKey
 	presharedKey []byte
 
-	peers []*Peer
+	peersMtx sync.RWMutex
+	peers    map[publicKey]*peer
+
+	handshakesMtx sync.RWMutex
+	handshakes    map[uint32]*handshake
 }
 
 // Run starts the interface and blocks until it is closed.
@@ -83,17 +94,46 @@ func (f *Interface) Close() error {
 // SetPrivateKey changes the private key for the interface. It is safe to call
 // while the interface is running.
 func (f *Interface) SetPrivateKey(k []byte) error {
-	if len(k) != 32 {
+	if len(k) != 0 && len(k) != 32 {
 		return errors.New("wireguard: PrivateKey must be exactly 32 bytes")
 	}
+
+	f.identityMtx.Lock()
+	defer f.identityMtx.Unlock()
+
+	if len(k) == 0 {
+		f.staticKey.Private = nil
+		f.staticKey.Public = nil
+		return nil
+	}
+
+	// calculate public key and set the keys on the interface
+	var pubkey, privkey [32]byte
+	copy(privkey[:], k)
+	curve25519.ScalarBaseMult(&pubkey, &privkey)
+	f.staticKey.Private = privkey[:]
+	f.staticKey.Public = pubkey[:]
+
 	return nil
 }
 
 // SetPresharedKey changes the pre-shared key for the interface.
 func (f *Interface) SetPresharedKey(k []byte) error {
-	if k != nil && len(k) != 32 {
+	if len(k) != 0 && len(k) != 32 {
 		return errors.New("wireguard: PresharedKey must be exactly 32 bytes")
 	}
+
+	f.identityMtx.Lock()
+	defer f.identityMtx.Unlock()
+
+	if len(k) == 0 {
+		f.presharedKey = nil
+	} else {
+		key := make([]byte, 32)
+		copy(key, k)
+		f.presharedKey = key
+	}
+
 	return nil
 }
 

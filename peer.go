@@ -38,6 +38,7 @@ type Peer struct {
 }
 
 type peer struct {
+	handshake handshake
 }
 
 func (p *peer) public() *Peer {
