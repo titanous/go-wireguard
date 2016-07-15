@@ -74,7 +74,10 @@ type Interface struct {
 	peers    map[publicKey]*peer
 
 	handshakesMtx sync.RWMutex
-	handshakes    map[uint32]*handshake
+	handshakes    map[uint32]*noiseHandshake
+
+	keypairsMtx sync.RWMutex
+	keypairs    map[uint32]*noiseKeypair
 }
 
 // Run starts the interface and blocks until it is closed.
