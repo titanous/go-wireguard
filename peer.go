@@ -38,7 +38,12 @@ type Peer struct {
 }
 
 type peer struct {
-	handshake noiseHandshake
+	endpointAddr      *net.UDPAddr
+	handshake         noiseHandshake
+	lastSentHandshake time.Time
+	latestCookie      cookie
+	keypairs          noiseKeypairs
+	rxBytes, txBytes  uint64
 }
 
 func (p *peer) public() *Peer {

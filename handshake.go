@@ -59,6 +59,8 @@ type noiseHandshake struct {
 	sendingCipher   noise.Cipher
 	receivingCipher noise.Cipher
 
+	remoteStatic [32]byte
+
 	peer *peer
 }
 
@@ -82,6 +84,11 @@ type noiseKeypair struct {
 	receiving noise.Cipher
 
 	peer *peer
+}
+
+type noiseKeypairs struct {
+	previous, current, next *noiseKeypair
+	sync.RWMutex
 }
 
 var (
@@ -114,6 +121,7 @@ func (f *Interface) handshakeCreateInitiation(handshake *noiseHandshake) []byte 
 		Prologue:      noisePrologue,
 		PresharedKey:  f.presharedKey,
 		StaticKeypair: f.staticKey,
+		PeerStatic:    handshake.remoteStatic[:],
 	})
 
 	res := make([]byte, 5, messageHandshakeInitiationLen)
@@ -250,7 +258,7 @@ func (f *Interface) handshakeConsumeResponse(data []byte) (*peer, error) {
 	return handshake.peer, nil
 }
 
-func (f *Interface) handshakeBeginSession(handshake *noiseHandshake, initiator bool) {
+func (f *Interface) handshakeBeginSession(handshake *noiseHandshake, keypairs *noiseKeypairs, initiator bool) {
 	handshake.Lock()
 	defer handshake.Unlock()
 	keypair := &noiseKeypair{
@@ -268,7 +276,34 @@ func (f *Interface) handshakeBeginSession(handshake *noiseHandshake, initiator b
 	f.handshakesMtx.Unlock()
 	handshake.clear()
 
+	keypairs.Lock()
+	if initiator {
+		if keypairs.next != nil {
+			keypairs.previous = keypairs.next
+			keypairs.next = nil
+		} else {
+			keypairs.previous = keypairs.current
+		}
+		keypairs.current = keypair
+	} else {
+		keypairs.next = keypair
+		keypairs.previous = nil
+	}
+	keypairs.Unlock()
+
 	f.keypairsMtx.Lock()
 	f.keypairs[keypair.senderIndex] = keypair
 	f.keypairsMtx.Unlock()
+}
+
+func (f *Interface) receivedWithKeypair(keypairs *noiseKeypairs, receivedKeypair *noiseKeypair) (next bool) {
+	keypairs.Lock()
+	defer keypairs.Unlock()
+	if receivedKeypair == keypairs.next {
+		keypairs.previous = keypairs.current
+		keypairs.current = receivedKeypair
+		keypairs.next = nil
+		next = true
+	}
+	return
 }
